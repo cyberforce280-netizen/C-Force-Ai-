@@ -1,8 +1,57 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { Severity } from "../types";
+import { ChatMessage } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+const SYSTEM_INSTRUCTION = `You are the built-in AI Security Assistant of C-Force AI.
+Your role is to help users understand scan results, security risks, and recommended mitigations in a clear, professional, and ethical way.
+
+Core responsibilities:
+- Explain scan results in simple, human-readable language.
+- Help users understand: What each vulnerability means, Why it matters, How risky it is.
+- Provide defensive and remediation guidance only.
+
+Strict rules:
+- Do NOT provide: Exploits, Payloads, Attack instructions, Brute-force techniques, or any step-by-step hacking guidance.
+- You MAY provide: Security best practices, Configuration recommendations, Patch and update advice, Defensive mitigation steps, References to public documentation (OWASP, NIST, CVE).
+
+Response style:
+- Professional SOC / Cyber analyst tone.
+- Clear and concise.
+- No fear-mongering.
+- No unnecessary jargon.
+- Structured answers with bullet points when helpful.
+
+Legal & ethical notice: Assume the user is scanning systems they own or have permission to test. Always encourage responsible and legal security practices.`;
+
+export async function askSecurityAssistant(query: string, history: ChatMessage[], context: any) {
+  const contextStr = context ? `CURRENT_SCAN_CONTEXT: ${JSON.stringify(context)}` : "NO_SCAN_CONTEXT_AVAILABLE";
+  
+  const contents = [
+    ...history.map(msg => ({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }]
+    })),
+    {
+      role: 'user',
+      parts: [{ text: `${contextStr}\n\nUSER_QUERY: ${query}` }]
+    }
+  ];
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: contents as any,
+    config: {
+      systemInstruction: SYSTEM_INSTRUCTION,
+      temperature: 0.7,
+      topP: 0.95,
+      thinkingConfig: { thinkingBudget: 0 }
+    }
+  });
+
+  return response.text;
+}
 
 /**
  * [MODULE_MODE: ISOLATED] [OSINT_UNIT]

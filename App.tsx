@@ -2,14 +2,14 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { CyberShield } from './components/CyberShield';
 import { Terminal } from './components/Terminal';
-import { gatherOSINT, scanVulnerabilities, exploreCountryIPs } from './services/geminiService';
-import { LogEntry } from './types';
+import { gatherOSINT, scanVulnerabilities, exploreCountryIPs, askSecurityAssistant } from './services/geminiService';
+import { LogEntry, ChatMessage } from './types';
 
 // Declare global libraries from index.html
 declare const jspdf: any;
 declare const html2canvas: any;
 
-type Page = 'SCANNER' | 'OSINT' | 'IP_EXPLORER';
+type Page = 'SCANNER' | 'OSINT' | 'IP_EXPLORER' | 'ASSISTANT';
 
 const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('SCANNER');
@@ -23,7 +23,13 @@ const App: React.FC = () => {
   const [osintResult, setOsintResult] = useState<any | null>(null);
   const [explorerResult, setExplorerResult] = useState<any | null>(null);
 
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [userQuery, setUserQuery] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+
   const reportRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
     setLogs(prev => [...prev.slice(-49), { timestamp: new Date().toLocaleTimeString(), message, type }]);
@@ -73,6 +79,28 @@ const App: React.FC = () => {
         setIsProcessing(false);
         setProgress(0);
       }, 300);
+    }
+  };
+
+  const handleChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userQuery.trim() || isTyping) return;
+
+    const query = userQuery;
+    setUserQuery('');
+    setChatMessages(prev => [...prev, { role: 'user', content: query }]);
+    setIsTyping(true);
+
+    try {
+      // Use current scan result or osint result as context
+      const context = scanResult || osintResult || explorerResult || null;
+      const response = await askSecurityAssistant(query, chatMessages, context);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: response || 'No response received.' }]);
+    } catch (err) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: 'CORE_CHAT_ERROR: Could not establish secure AI connection.' }]);
+    } finally {
+      setIsTyping(false);
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   };
 
@@ -139,7 +167,8 @@ const App: React.FC = () => {
           {[
             { id: 'SCANNER', label: 'Vuln Scan', color: 'red', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
             { id: 'OSINT', label: 'OSINT Unit', color: 'cyan', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7' },
-            { id: 'IP_EXPLORER', label: 'IP Trace', color: 'orange', icon: 'M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 002 2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }
+            { id: 'IP_EXPLORER', label: 'IP Trace', color: 'orange', icon: 'M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 002 2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+            { id: 'ASSISTANT', label: 'AI Analyst', color: 'emerald', icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z' }
           ].map(item => (
             <button 
               key={item.id} 
@@ -163,32 +192,34 @@ const App: React.FC = () => {
 
         <header className="h-20 border-b border-zinc-900 bg-zinc-950/80 backdrop-blur-xl flex items-center justify-between px-10 z-20">
           <div className="flex items-center gap-4">
-             <div className={`w-3 h-3 rounded-full animate-pulse ${currentPage === 'SCANNER' ? 'bg-red-600' : (currentPage === 'OSINT' ? 'bg-cyan-500' : 'bg-orange-500')}`}></div>
+             <div className={`w-3 h-3 rounded-full animate-pulse ${currentPage === 'SCANNER' ? 'bg-red-600' : (currentPage === 'OSINT' ? 'bg-cyan-500' : (currentPage === 'IP_EXPLORER' ? 'bg-orange-500' : 'bg-emerald-500'))}`}></div>
              <h2 className="font-orbitron text-[11px] font-black tracking-[0.5em] uppercase text-zinc-500">
                 AI_TERMINAL::{currentPage}
              </h2>
           </div>
-          <form onSubmit={handleAction} className="flex gap-3">
-            <input 
-              type="text" 
-              placeholder={currentPage === 'IP_EXPLORER' ? "Enter Country (e.g., Palestine)..." : "Enter Target (IP or Domain)..."}
-              value={target} 
-              onChange={(e) => setTarget(e.target.value)}
-              className={`bg-black/60 border border-zinc-800 rounded-lg px-5 py-2.5 text-xs font-mono w-80 md:w-[450px] outline-none transition-all focus:border-${currentPage === 'SCANNER' ? 'red' : (currentPage === 'OSINT' ? 'cyan' : 'orange')}-600`}
-            />
-            <button type="submit" disabled={isProcessing} className={`px-8 py-2.5 rounded-lg font-orbitron text-[11px] font-black uppercase shadow-xl transition-all hover:brightness-125 ${currentPage === 'SCANNER' ? 'bg-red-600' : (currentPage === 'OSINT' ? 'bg-cyan-600' : 'bg-orange-600')}`}>
-              {isProcessing ? 'SCANNING...' : 'EXECUTE'}
-            </button>
-          </form>
+          {currentPage !== 'ASSISTANT' && (
+            <form onSubmit={handleAction} className="flex gap-3">
+              <input 
+                type="text" 
+                placeholder={currentPage === 'IP_EXPLORER' ? "Enter Country (e.g., Palestine)..." : "Enter Target (IP or Domain)..."}
+                value={target} 
+                onChange={(e) => setTarget(e.target.value)}
+                className={`bg-black/60 border border-zinc-800 rounded-lg px-5 py-2.5 text-xs font-mono w-80 md:w-[450px] outline-none transition-all focus:border-${currentPage === 'SCANNER' ? 'red' : (currentPage === 'OSINT' ? 'cyan' : 'orange')}-600`}
+              />
+              <button type="submit" disabled={isProcessing} className={`px-8 py-2.5 rounded-lg font-orbitron text-[11px] font-black uppercase shadow-xl transition-all hover:brightness-125 ${currentPage === 'SCANNER' ? 'bg-red-600' : (currentPage === 'OSINT' ? 'bg-cyan-600' : 'bg-orange-600')}`}>
+                {isProcessing ? 'SCANNING...' : 'EXECUTE'}
+              </button>
+            </form>
+          )}
         </header>
 
         <div className="flex-1 overflow-y-auto p-10 cyber-grid scroll-hide relative">
-          <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-10">
+          <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-10 h-full">
             
-            <div className="lg:col-span-1 space-y-8">
+            <div className="lg:col-span-1 flex flex-col space-y-8">
               <div className="bg-zinc-950/50 border border-zinc-900 rounded-3xl p-8 backdrop-blur-md shadow-2xl">
-                <h3 className={`text-[11px] font-orbitron mb-8 uppercase tracking-[0.3em] flex items-center gap-2 ${currentPage === 'SCANNER' ? 'text-red-500' : (currentPage === 'OSINT' ? 'text-cyan-500' : 'text-orange-500')}`}>
-                   <div className={`w-1 h-3 ${currentPage === 'SCANNER' ? 'bg-red-500' : (currentPage === 'OSINT' ? 'bg-cyan-500' : 'bg-orange-500')}`}></div> Unit Status
+                <h3 className={`text-[11px] font-orbitron mb-8 uppercase tracking-[0.3em] flex items-center gap-2 ${currentPage === 'SCANNER' ? 'text-red-500' : (currentPage === 'OSINT' ? 'text-cyan-500' : (currentPage === 'IP_EXPLORER' ? 'text-orange-500' : 'text-emerald-500'))}`}>
+                   <div className={`w-1 h-3 ${currentPage === 'SCANNER' ? 'bg-red-500' : (currentPage === 'OSINT' ? 'bg-cyan-500' : (currentPage === 'IP_EXPLORER' ? 'bg-orange-500' : 'bg-emerald-500'))}`}></div> Unit Status
                 </h3>
                 <div className="space-y-6">
                    <div>
@@ -209,8 +240,69 @@ const App: React.FC = () => {
               <Terminal logs={logs} />
             </div>
 
-            <div className="lg:col-span-3">
+            <div className="lg:col-span-3 h-full flex flex-col">
               
+              {/* ASSISTANT VIEW */}
+              {currentPage === 'ASSISTANT' && (
+                <div className="flex-1 flex flex-col bg-zinc-950/80 border border-zinc-900 rounded-[30px] shadow-2xl overflow-hidden animate-[fadeIn_0.5s]">
+                  <div className="p-6 border-b border-zinc-900 bg-zinc-900/30 flex justify-between items-center">
+                    <div>
+                      <h3 className="text-xl font-orbitron font-black text-emerald-500 uppercase tracking-tight">AI Security Analyst</h3>
+                      <p className="text-[10px] text-zinc-500 uppercase font-bold tracking-widest">Expert Guidance Core</p>
+                    </div>
+                    <div className="text-right">
+                       <span className="px-3 py-1 bg-emerald-950 text-emerald-500 text-[9px] font-black rounded-full border border-emerald-900">ENCRYPTED_COMMS</span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-black/40">
+                    {chatMessages.length === 0 && (
+                      <div className="h-full flex flex-col items-center justify-center opacity-40 text-center p-12">
+                         <CyberShield size="w-24 h-24" dark />
+                         <h4 className="mt-8 text-xl font-orbitron font-bold text-emerald-500 uppercase tracking-[0.3em]">Neural Interface Ready</h4>
+                         <p className="mt-4 text-xs font-mono text-zinc-400 max-w-sm">
+                           Ask me about the results of your recent scan, specific CVEs, or general security best practices.
+                         </p>
+                      </div>
+                    )}
+                    {chatMessages.map((msg, i) => (
+                      <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[85%] p-5 rounded-2xl font-mono text-xs leading-relaxed border ${
+                          msg.role === 'user' 
+                          ? 'bg-zinc-900 border-zinc-800 text-zinc-300 rounded-tr-none' 
+                          : 'bg-emerald-950/20 border-emerald-900/50 text-emerald-400 rounded-tl-none shadow-[0_0_20px_rgba(16,185,129,0.05)]'
+                        }`}>
+                          <p className="whitespace-pre-wrap">{msg.content}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {isTyping && (
+                      <div className="flex justify-start">
+                        <div className="bg-emerald-950/20 border border-emerald-900/50 p-4 rounded-2xl rounded-tl-none flex gap-2">
+                           <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce"></div>
+                           <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.1s]"></div>
+                           <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.2s]"></div>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={chatEndRef} />
+                  </div>
+
+                  <form onSubmit={handleChat} className="p-6 bg-zinc-900/30 border-t border-zinc-900 flex gap-4">
+                    <input 
+                      type="text" 
+                      placeholder="Ask the analyst..." 
+                      value={userQuery}
+                      onChange={(e) => setUserQuery(e.target.value)}
+                      className="flex-1 bg-black border border-zinc-800 rounded-xl px-5 py-4 text-xs font-mono outline-none focus:border-emerald-600 transition-all text-emerald-100"
+                    />
+                    <button type="submit" disabled={isTyping || !userQuery.trim()} className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-black font-orbitron text-[10px] font-black px-8 rounded-xl transition-all shadow-xl uppercase">
+                      SEND
+                    </button>
+                  </form>
+                </div>
+              )}
+
               {/* COMPREHENSIVE SCANNER VIEW */}
               {currentPage === 'SCANNER' && scanResult && (
                 <div className="space-y-8 animate-[fadeIn_0.5s]">
@@ -412,7 +504,7 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {!scanResult && !osintResult && !explorerResult && (
+              {!scanResult && !osintResult && !explorerResult && currentPage !== 'ASSISTANT' && (
                 <div className="h-[70vh] flex flex-col items-center justify-center text-center opacity-30">
                    <CyberShield size="w-32 h-32" dark />
                    <h3 className="text-4xl font-orbitron font-black uppercase tracking-[0.5em] mt-8 text-zinc-700">Awaiting Signal</h3>
@@ -434,6 +526,47 @@ const App: React.FC = () => {
             </div>
           </div>
           
+          {currentPage === 'SCANNER' && scanResult && (
+            <div className="space-y-10">
+               <div className="bg-zinc-900 p-8 rounded-3xl">
+                  <h2 className="text-3xl font-black text-red-600 mb-4 uppercase">Risk Assessment: {renderSafe(scanResult.status)}</h2>
+                  <p className="text-xl text-zinc-400 italic mb-6">"{renderSafe(scanResult.exposureSummary)}"</p>
+               </div>
+               {Array.isArray(scanResult.vulnerabilities) && scanResult.vulnerabilities.map((v: any, i: number) => (
+                 <div key={i} className="mb-10 bg-zinc-900/50 p-10 rounded-3xl border border-zinc-800">
+                    <h2 className="text-4xl font-black mb-4 text-red-500">{renderSafe(v.title)} ({renderSafe(v.severity)})</h2>
+                    <p className="text-xl text-zinc-400 italic mb-8">{renderSafe(v.description)}</p>
+                    <div className="grid grid-cols-2 gap-8">
+                       <div className="p-6 bg-black rounded-2xl border border-zinc-800">
+                          <p className="text-sm font-black text-red-600 uppercase mb-2">Technical Finding</p>
+                          <p className="text-lg">{renderSafe(v.exploitInfo)}</p>
+                       </div>
+                       <div className="p-6 bg-black rounded-2xl border border-zinc-800">
+                          <p className="text-sm font-black text-emerald-600 uppercase mb-2">Remediation</p>
+                          <p className="text-lg">{renderSafe(v.remediation)}</p>
+                       </div>
+                    </div>
+                 </div>
+               ))}
+            </div>
+          )}
+
+          {currentPage === 'OSINT' && osintResult && (
+            <div className="space-y-10">
+               <div className="bg-zinc-900 p-8 rounded-3xl">
+                  <h2 className="text-3xl font-black text-cyan-600 mb-4 uppercase">OSINT Executive Intelligence Summary</h2>
+                  <p className="text-xl text-zinc-400 italic mb-6">"{renderSafe(osintResult.executiveSummary)}"</p>
+               </div>
+               <div className="bg-zinc-900/50 p-10 rounded-3xl border border-zinc-800">
+                  <h2 className="text-2xl font-black text-cyan-500 mb-6 uppercase">Infrastructure & Historical Intelligence</h2>
+                  <div className="p-6 bg-black rounded-2xl border border-zinc-800">
+                     <p className="text-lg font-mono">IPs: {renderSafe(osintResult.infrastructureProfile?.ipAddresses)}</p>
+                     <p className="text-lg italic">{renderSafe(osintResult.historicalIntelligence)}</p>
+                  </div>
+               </div>
+            </div>
+          )}
+
           {currentPage === 'IP_EXPLORER' && explorerResult && (
             <div className="space-y-10">
                <div className="bg-zinc-900 p-8 rounded-3xl">
@@ -461,7 +594,7 @@ const App: React.FC = () => {
 
         <footer className="h-14 bg-zinc-950 border-t border-zinc-900 px-12 flex items-center justify-between text-[10px] font-mono text-zinc-600 uppercase tracking-[0.5em] z-30">
            <div className="flex gap-16">
-              <span className="flex items-center gap-3"><div className={`w-2 h-2 ${currentPage === 'SCANNER' ? 'bg-red-600 shadow-[0_0_10px_#f00]' : (currentPage === 'OSINT' ? 'bg-cyan-500' : 'bg-orange-500')}`}></div> CORE_MODE: {currentPage}</span>
+              <span className="flex items-center gap-3"><div className={`w-2 h-2 ${currentPage === 'SCANNER' ? 'bg-red-600 shadow-[0_0_10px_#f00]' : (currentPage === 'OSINT' ? 'bg-cyan-500' : (currentPage === 'IP_EXPLORER' ? 'bg-orange-500' : 'bg-emerald-500'))}`}></div> CORE_MODE: {currentPage}</span>
               <span className="flex items-center gap-3 text-zinc-800"><div className="w-2 h-2 bg-zinc-800 animate-pulse"></div> SECURE_LINK_ESTABLISHED</span>
            </div>
            <span className="text-zinc-800 font-black">C-FORCE_AI // TURBO_V4.0</span>
